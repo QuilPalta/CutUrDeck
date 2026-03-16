@@ -42,6 +42,7 @@ function DeckContent() {
 
   const [selectedCard, setSelectedCard] = useState<DeckCard | null>(null);
 
+  // --- MOTOR DEL ALGORITMO CUTTER PRO ---
   const calculateCuts = useCallback(async (cards: DeckCard[], budget: number, currentTotal: number) => {
     setIsCalculating(true);
     const budgetGap = budget - currentTotal;
@@ -58,7 +59,23 @@ function DeckContent() {
         for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
           const cutCard = candidatesToRemove[i];
           const altCard = await getCardByName(budgetAlternatives[i % budgetAlternatives.length]);
+          
           if (altCard) {
+            // FETCH EN TIEMPO REAL DEL PRECIO EN CARD KINGDOM
+            try {
+              const proxyRes = await fetch(`/api/proxy?platform=moxfield-card&q=${encodeURIComponent(altCard.name)}`);
+              if (proxyRes.ok) {
+                const moxData = await proxyRes.json();
+                if (moxData.data && moxData.data.length > 0) {
+                  const ckPrice = moxData.data[0].prices?.ck;
+                  // Sobrescribimos el precio de Scryfall (usd) con el de CK para que el BrokerPanel lo muestre correcto
+                  if (ckPrice) altCard.prices.usd = String(ckPrice);
+                }
+              }
+            } catch (err) {
+              console.warn("No se pudo obtener el precio CK para la sugerencia, usando fallback TCGPlayer", err);
+            }
+
             newSuggestions.push({
               cutCard, addCard: altCard, category: "Corte de Presupuesto",
               reason: `Eficiencia Baja: ${cutCard.name} cuesta $${cutCard.ckPrice.toFixed(2)} pero tiene un ranking EDHREC pobre (${cutCard.edhrecRank || 'N/A'}).`
@@ -75,7 +92,22 @@ function DeckContent() {
         for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
           const cutCard = candidatesToRemove[i];
           const stapleCard = await getCardByName(premiumStaples[i % premiumStaples.length]);
+          
           if (stapleCard) {
+            // FETCH EN TIEMPO REAL DEL PRECIO EN CARD KINGDOM
+            try {
+              const proxyRes = await fetch(`/api/proxy?platform=moxfield-card&q=${encodeURIComponent(stapleCard.name)}`);
+              if (proxyRes.ok) {
+                const moxData = await proxyRes.json();
+                if (moxData.data && moxData.data.length > 0) {
+                  const ckPrice = moxData.data[0].prices?.ck;
+                  if (ckPrice) stapleCard.prices.usd = String(ckPrice);
+                }
+              }
+            } catch (err) {
+              console.warn("No se pudo obtener el precio CK para la sugerencia, usando fallback TCGPlayer", err);
+            }
+
             newSuggestions.push({
               cutCard, addCard: stapleCard, category: "Upgrade de Poder",
               reason: `Inversión: ${cutCard.name} es el eslabón débil de tu mazo. Aprovecha el margen de $${budgetGap.toFixed(2)} para incluir una pieza central ganadora.`
@@ -121,7 +153,6 @@ function DeckContent() {
           const match = dbDeck.raw_data.match(/decks\/([a-zA-Z0-9_-]+)/);
           if (!match) throw new Error("URL inválida de Moxfield");
           
-          // ¡CAMBIO CLAVE! Usamos nuestra propia API interna en lugar de corsproxy.io
           const res = await fetch(`/api/proxy?platform=moxfield&deckId=${match[1]}&cb=${cacheBuster}`);
           if (!res.ok) throw new Error("No se pudo conectar con Moxfield mediante el Proxy");
           
@@ -149,7 +180,6 @@ function DeckContent() {
           const match = dbDeck.raw_data.match(/decks\/(\d+)/);
           if (!match) throw new Error("URL inválida de Archidekt");
           
-          // ¡CAMBIO CLAVE! Usamos nuestra propia API interna para Archidekt
           const res = await fetch(`/api/proxy?platform=archidekt&deckId=${match[1]}&cb=${cacheBuster}`);
           if (!res.ok) throw new Error("No se pudo conectar con Archidekt mediante el Proxy");
           
@@ -188,6 +218,8 @@ function DeckContent() {
           deckPriceSum += (card.ckPrice * card.quantity);
           return { ...card, edhrecRank: rankMap.get(card.name) || 999999 };
         });
+
+        parsedList.sort((a, b) => b.ckPrice - a.ckPrice);
 
         setDeckList(parsedList);
         setTotalCards(cardsCount);
