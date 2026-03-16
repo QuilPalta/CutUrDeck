@@ -10,6 +10,8 @@ import { supabase } from '@/lib/supabase';
 import { getCardByName, ScryfallCard } from '@/lib/scryfall';
 import { getExactCardKingdomPrice } from '@/lib/mtgjson';
 
+export const dynamic = 'force-dynamic';
+
 interface DeckData {
   id: string;
   platform: string;
