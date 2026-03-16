@@ -1,28 +1,27 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { Loader2, AlertCircle, ArrowRight, TrendingDown, RefreshCcw, Layers, ExternalLink, ShoppingCart } from 'lucide-react';
+import { Loader2, AlertCircle, Layers, ExternalLink, DollarSign } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { LanguageProvider, useLanguage } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
 import { getCardByName, ScryfallCard } from '@/lib/scryfall';
-import { getExactCardKingdomPrice } from '@/lib/mtgjson';
+import { DeckCard, SuggestionPair, DeckData } from '@/lib/types';
+
+import CommanderHero from '@/components/deck/CommanderHero';
+import InventoryTable from '@/components/deck/InventoryTable';
+import BrokerPanel from '@/components/deck/BrokerPanel';
+import CardModal from '@/components/deck/CardModal';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
-interface DeckData {
-  id: string;
-  platform: string;
-  raw_data: string;
-}
-
-interface SuggestionPair {
-  cutCard: ScryfallCard;
-  addCard: ScryfallCard;
-  reason: string;
-}
+const BASIC_LANDS = new Set([
+  'Plains', 'Island', 'Swamp', 'Mountain', 'Forest',
+  'Snow-Covered Plains', 'Snow-Covered Island', 'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest',
+  'Wastes'
+]);
 
 function DeckContent() {
   const { t } = useLanguage();
@@ -31,348 +30,251 @@ function DeckContent() {
 
   const [deck, setDeck] = useState<DeckData | null>(null);
   const [commander, setCommander] = useState<ScryfallCard | null>(null);
+  const [deckList, setDeckList] = useState<DeckCard[]>([]);
   const [totalCards, setTotalCards] = useState<number>(0);
+  const [totalPriceCK, setTotalPriceCK] = useState<number>(0);
+  const [targetBudget, setTargetBudget] = useState<number>(160);
+  
   const [suggestions, setSuggestions] = useState<SuggestionPair[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCalculating, setIsCalculating] = useState(false);
   const [error, setError] = useState('');
+
+  const [selectedCard, setSelectedCard] = useState<DeckCard | null>(null);
+
+  const calculateCuts = useCallback(async (cards: DeckCard[], budget: number, currentTotal: number) => {
+    setIsCalculating(true);
+    const budgetGap = budget - currentTotal;
+    const newSuggestions: SuggestionPair[] = [];
+
+    try {
+      if (budgetGap < 0) {
+        const candidatesToRemove = cards
+          .filter(c => c.ckPrice > 3.0 && !c.isCommander)
+          .sort((a, b) => (b.edhrecRank || 0) - (a.edhrecRank || 0));
+
+        const budgetAlternatives = ["Negate", "Cultivate", "Swords to Plowshares", "Sign in Blood", "Naturalize"];
+        
+        for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
+          const cutCard = candidatesToRemove[i];
+          const altCard = await getCardByName(budgetAlternatives[i % budgetAlternatives.length]);
+          if (altCard) {
+            newSuggestions.push({
+              cutCard, addCard: altCard, category: "Corte de Presupuesto",
+              reason: `Eficiencia Baja: ${cutCard.name} cuesta $${cutCard.ckPrice.toFixed(2)} pero tiene un ranking EDHREC pobre (${cutCard.edhrecRank || 'N/A'}).`
+            });
+          }
+        }
+      } else {
+        const candidatesToRemove = cards
+          .filter(c => c.ckPrice > 0 && c.ckPrice < 2.0 && !c.isCommander && !c.type_line.toLowerCase().includes("land"))
+          .sort((a, b) => (b.edhrecRank || 0) - (a.edhrecRank || 0));
+
+        const premiumStaples = ["Rhystic Study", "Demonic Tutor", "Teferi's Protection", "Cyclonic Rift", "Smothering Tithe"];
+        
+        for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
+          const cutCard = candidatesToRemove[i];
+          const stapleCard = await getCardByName(premiumStaples[i % premiumStaples.length]);
+          if (stapleCard) {
+            newSuggestions.push({
+              cutCard, addCard: stapleCard, category: "Upgrade de Poder",
+              reason: `Inversión: ${cutCard.name} es el eslabón débil de tu mazo. Aprovecha el margen de $${budgetGap.toFixed(2)} para incluir una pieza central ganadora.`
+            });
+          }
+        }
+      }
+      setSuggestions(newSuggestions);
+    } catch (e) {
+      console.error("Error calculando sugerencias", e);
+    } finally {
+      setIsCalculating(false);
+    }
+  }, []);
 
   useEffect(() => {
     async function fetchDeckAndAnalysis() {
       if (!deckId) return;
 
       try {
-        const { data: dbDeck, error: dbError } = await supabase
-          .from('decks')
-          .select('id, platform, raw_data')
-          .eq('id', deckId)
-          .single();
-
-        if (dbError || !dbDeck) throw new Error(t.deckNotFound);
+        const { data: dbDeck, error: dbError } = await supabase.from('decks').select('id, platform, raw_data').eq('id', deckId).single();
+        if (dbError || !dbDeck) throw new Error(t.deckNotFound || "Mazo no encontrado");
         setDeck(dbDeck);
 
         let commanderName = '';
         let cardsCount = 0;
-        const cardNamesList: string[] = [];
+        let deckPriceSum = 0;
+        const cardMap = new Map<string, DeckCard>();
+
+        const addCardToMap = (name: string, quantity: number, ckPrice: number, imageUrl: string, isCmd: boolean, id: string, isFoil: boolean, scryfallId: string, setName: string, typeLine: string) => {
+          const mapKey = `${name}-${setName}-${isFoil ? 'foil' : 'normal'}`;
+          if (cardMap.has(mapKey)) {
+            cardMap.get(mapKey)!.quantity += quantity;
+          } else {
+            cardMap.set(mapKey, { id, scryfallId, name, quantity, ckPrice, imageUrl, isCommander: isCmd, isFoil, setName, edhrecRank: 999999, type_line: typeLine });
+          }
+        };
+
+        let rawCardsData: any[] = [];
+        const cacheBuster = Date.now();
 
         if (dbDeck.platform === 'moxfield') {
           const match = dbDeck.raw_data.match(/decks\/([a-zA-Z0-9_-]+)/);
-          if (!match) throw new Error(t.errMoxfieldInvalid);
+          if (!match) throw new Error("URL inválida de Moxfield");
           
-          const targetUrl = encodeURIComponent(`https://api.moxfield.com/v2/decks/all/${match[1]}`);
-          const res = await fetch(`https://corsproxy.io/?${targetUrl}`);
-          
-          if (!res.ok) throw new Error(t.errMoxfieldBlocked);
+          // ¡CAMBIO CLAVE! Usamos nuestra propia API interna en lugar de corsproxy.io
+          const res = await fetch(`/api/proxy?platform=moxfield&deckId=${match[1]}&cb=${cacheBuster}`);
+          if (!res.ok) throw new Error("No se pudo conectar con Moxfield mediante el Proxy");
           
           const moxData = await res.json();
 
-          if (moxData.commanders && Object.keys(moxData.commanders).length > 0) {
-            commanderName = Object.keys(moxData.commanders)[0];
-          }
-          if (moxData.mainboard) {
-            const mainboardCards = Object.keys(moxData.mainboard);
-            cardsCount = mainboardCards.length;
-            cardNamesList.push(...mainboardCards);
-          }
+          const processMoxCard = (item: any, isCmd: boolean) => {
+            const name = item.card?.name || "Desconocida";
+            const quantity = Number(item.count ?? item.quantity ?? 1);
+            const isFoil = item.finish === 'foil' || item.isFoil === true;
+            const isBasic = BASIC_LANDS.has(name);
+            
+            const priceNormal = Number(item.card?.prices?.ck || 0);
+            const rawPrice = isFoil ? (Number(item.card?.prices?.ck_foil || 0) > 0 ? Number(item.card?.prices?.ck_foil) : priceNormal) : priceNormal;
+            const ckPrice = isBasic ? 0 : rawPrice;
 
+            rawCardsData.push({ name });
+            addCardToMap(name, quantity, ckPrice, item.card?.image_uris?.normal || item.card?.card_faces?.[0]?.image_uris?.normal || "", isCmd, item.card?.id || name, isFoil, item.card?.scryfall_id || item.card?.id || "", item.card?.set_name || item.card?.set?.toUpperCase() || "Desconocida", item.card?.type_line || "Desconocido");
+            if (isCmd && !commanderName) commanderName = name;
+          };
+
+          if (moxData.commanders) Object.values(moxData.commanders).forEach((c: any) => processMoxCard(c, true));
+          if (moxData.mainboard) Object.values(moxData.mainboard).forEach((c: any) => processMoxCard(c, false));
+        
         } else if (dbDeck.platform === 'archidekt') {
           const match = dbDeck.raw_data.match(/decks\/(\d+)/);
-          if (!match) throw new Error(t.errArchidektInvalid);
+          if (!match) throw new Error("URL inválida de Archidekt");
           
-          const targetUrl = encodeURIComponent(`https://archidekt.com/api/decks/${match[1]}/`);
-          const res = await fetch(`https://corsproxy.io/?${targetUrl}`);
-          
-          if (!res.ok) throw new Error(t.errArchidektBlocked);
+          // ¡CAMBIO CLAVE! Usamos nuestra propia API interna para Archidekt
+          const res = await fetch(`/api/proxy?platform=archidekt&deckId=${match[1]}&cb=${cacheBuster}`);
+          if (!res.ok) throw new Error("No se pudo conectar con Archidekt mediante el Proxy");
           
           const archData = await res.json();
 
           archData.cards.forEach((item: any) => {
-            if (item.categories.includes("Commander")) {
-              commanderName = item.card.oracleCard.name;
-            } else {
-              cardNamesList.push(item.card.oracleCard.name);
-            }
+            const isCmd = item.categories.includes("Commander");
+            const name = item.card?.oracleCard?.name || item.card?.name || "Desconocida";
+            const quantity = Number(item.quantity ?? item.count ?? 1);
+            const isFoil = item.modifier === 'Foil' || item.modifier === 'Foil Etched';
+            const isBasic = BASIC_LANDS.has(name);
+
+            const priceNormal = Number(item.card?.prices?.ck || 0);
+            const rawPrice = isFoil ? (Number(item.card?.prices?.ck_foil || 0) > 0 ? Number(item.card?.prices?.ck_foil) : priceNormal) : priceNormal;
+            const ckPrice = isBasic ? 0 : rawPrice;
+
+            rawCardsData.push({ name });
+            addCardToMap(name, quantity, ckPrice, item.card?.image_uris?.normal || item.card?.card_faces?.[0]?.image_uris?.normal || "", isCmd, item.card?.uid || name, isFoil, item.card?.uid || "", item.card?.edition?.editionname || item.card?.edition?.editioncode?.toUpperCase() || "Desconocida", item.card?.oracleCard?.typeLine || item.card?.type_line || "Desconocido");
+            if (isCmd && !commanderName) commanderName = name;
           });
-          cardsCount = cardNamesList.length;
-        } else {
-          throw new Error(t.errPlatform);
         }
 
-        setTotalCards(cardsCount);
+        const uniqueNames = Array.from(new Set(rawCardsData.map(c => c.name)));
+        const rankMap = new Map<string, number>();
+        for (let i = 0; i < uniqueNames.length; i += 75) {
+          const chunk = uniqueNames.slice(i, i + 75).map(n => ({ name: n }));
+          const sfRes = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiers: chunk }) });
+          if (sfRes.ok) {
+            const sfData = await sfRes.json();
+            sfData.data.forEach((card: any) => rankMap.set(card.name, card.edhrec_rank || 999999));
+          }
+        }
 
-        // Fetch Comandante: Scryfall (Visuals) + MTGJSON (Precio CK)
+        const parsedList = Array.from(cardMap.values()).map(card => {
+          cardsCount += card.quantity;
+          deckPriceSum += (card.ckPrice * card.quantity);
+          return { ...card, edhrecRank: rankMap.get(card.name) || 999999 };
+        });
+
+        setDeckList(parsedList);
+        setTotalCards(cardsCount);
+        setTotalPriceCK(deckPriceSum);
+
         if (commanderName) {
           const cmdData = await getCardByName(commanderName);
-          if (cmdData) {
-            const ckPrice = await getExactCardKingdomPrice(commanderName);
-            setCommander({ ...cmdData, exact_ck_price: ckPrice });
-          }
+          if (cmdData) setCommander(cmdData);
         }
 
-        const mockAnalysis = [
-          { cut: "Sol Ring", add: "Mana Crypt", reason: "Mejora de Curva: Mana Crypt acelera brutalmente tu inicio, siendo un coste 0." }
-        ];
-
-        const loadedSuggestions: SuggestionPair[] = [];
-        for (const pair of mockAnalysis) {
-          const cutData = await getCardByName(pair.cut);
-          const addData = await getCardByName(pair.add);
-          
-          if (cutData && addData) {
-            // Fetch precios exactos de Card Kingdom de manera independiente
-            const cutCkPrice = await getExactCardKingdomPrice(pair.cut);
-            const addCkPrice = await getExactCardKingdomPrice(pair.add);
-
-            loadedSuggestions.push({ 
-              cutCard: { ...cutData, exact_ck_price: cutCkPrice }, 
-              addCard: { ...addData, exact_ck_price: addCkPrice }, 
-              reason: pair.reason 
-            });
-          }
-        }
-        
-        setSuggestions(loadedSuggestions);
+        calculateCuts(parsedList, targetBudget, deckPriceSum);
 
       } catch (err: any) {
         console.error(err);
-        setError(err.message || t.deckError);
+        setError(err.message || "Error al procesar el mazo");
       } finally {
         setIsLoading(false);
       }
     }
 
     fetchDeckAndAnalysis();
-  }, [deckId, t]);
+  }, [deckId, t, targetBudget, calculateCuts]);
 
-  // Componente interno actualizado: Card Kingdom usa su propio dato exacto
-  const CardPrices = ({ card }: { card: ScryfallCard }) => {
-    const cardKingdomSearchUrl = `https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=${encodeURIComponent(card.name)}`;
-    const ckLink = card.purchase_uris?.cardkingdom || cardKingdomSearchUrl;
-
-    return (
-      <div className="flex flex-col gap-2 mt-3 w-full">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
-          {/* 1. Card Kingdom (Precio exacto extraído de la integración MTGJSON) */}
-          <a 
-            href={ckLink} 
-            target="_blank" 
-            rel="noreferrer" 
-            className="flex items-center justify-between px-3 py-2 bg-gray-900 border border-gray-700 hover:border-gray-500 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-colors group"
-          >
-            <span className="flex items-center gap-1.5">
-              <ShoppingCart className="w-3.5 h-3.5 text-emerald-500 group-hover:text-emerald-400" />
-              {t.priceCK}
-            </span>
-            <span className="text-emerald-400 font-bold">
-               {card.exact_ck_price ? `$${card.exact_ck_price}` : 'N/A'}
-            </span>
-          </a>
-
-          {/* 2. TCGPlayer (Precio original de Scryfall) */}
-          {card.prices.usd && (
-            <a 
-              href={card.purchase_uris?.tcgplayer} 
-              target="_blank" 
-              rel="noreferrer" 
-              className="flex items-center justify-between px-3 py-2 bg-gray-900 border border-gray-700 hover:border-gray-500 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-colors group"
-            >
-              <span className="flex items-center gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5 text-blue-500 group-hover:text-blue-400" />
-                {t.priceTCG}
-              </span>
-              <span className="text-gray-400">${card.prices.usd}</span>
-            </a>
-          )}
-
-          {/* 3. Cardmarket */}
-          {card.prices.eur && (
-            <a 
-              href={card.purchase_uris?.cardmarket} 
-              target="_blank" 
-              rel="noreferrer" 
-              className="flex items-center justify-between px-3 py-2 bg-gray-900 border border-gray-700 hover:border-gray-500 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-colors group sm:col-span-2 md:col-span-1"
-            >
-              <span className="flex items-center gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5 text-yellow-500 group-hover:text-yellow-400" />
-                {t.priceCM}
-              </span>
-              <span className="text-gray-400">€{card.prices.eur}</span>
-            </a>
-          )}
-        </div>
-      </div>
-    );
+  const handleBudgetSubmit = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') calculateCuts(deckList, targetBudget, totalPriceCK);
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-        <Navbar />
-        <div className="flex-1 flex flex-col items-center justify-center">
-          <Loader2 className="w-10 h-10 text-purple-500 animate-spin mb-4" />
-          <p className="text-gray-400 font-medium">{t.deckLoading}</p>
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return (
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center">
+      <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mb-4" />
+      <p className="text-gray-400 font-medium">Sincronizando con Scryfall y Card Kingdom...</p>
+    </div>
+  );
 
-  if (error || !deck) {
-    return (
-      <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-        <Navbar />
-        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-          <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl max-w-md w-full flex flex-col items-center">
-            <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
-            <h2 className="text-xl font-bold text-red-400 mb-2">Error</h2>
-            <p className="text-gray-300">{error}</p>
-          </div>
-        </div>
+  if (error || !deck) return (
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 text-center">
+      <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl max-w-md w-full">
+        <AlertCircle className="w-12 h-12 text-red-400 mb-4 mx-auto" />
+        <h2 className="text-xl font-bold text-red-400 mb-2">Error</h2>
+        <p className="text-gray-300">{error}</p>
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-purple-500/30 pb-20">
+    <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-emerald-500/30 pb-20">
       <Navbar />
-
       <main className="max-w-6xl mx-auto px-6 pt-10">
         
-        <div className="flex justify-between items-end mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white mb-2">
-              {t.deckTitle}
-            </h1>
-            <p className="text-sm text-gray-400 flex items-center gap-2">
-              {t.deckPlatform}: 
-              <a href={deck.raw_data} target="_blank" rel="noreferrer" className="capitalize text-purple-400 hover:text-purple-300 font-medium underline-offset-2 hover:underline transition-all flex items-center gap-1">
-                {deck.platform} <ExternalLink className="w-3 h-3" />
-              </a>
-            </p>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white mb-2">Análisis del Mazo</h1>
+            <p className="text-sm text-gray-400 flex items-center gap-2">Origen: <a href={deck.raw_data} target="_blank" rel="noreferrer" className="capitalize text-emerald-400 hover:text-emerald-300 font-medium underline-offset-2 hover:underline flex items-center gap-1">{deck.platform} <ExternalLink className="w-3 h-3" /></a></p>
           </div>
-          <div className="hidden sm:flex items-center gap-2 bg-gray-900 border border-gray-800 px-4 py-2 rounded-xl">
-             <Layers className="w-5 h-5 text-purple-400" />
-             <span className="font-bold text-lg text-white">{totalCards}</span>
-             <span className="text-xs text-gray-500 uppercase">{t.deckCardsTotal}</span>
+          <div className="flex items-center gap-3">
+             <div className="flex flex-col bg-gray-900 border border-gray-800 px-5 py-3 rounded-xl">
+               <span className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1 flex items-center gap-1"><Layers className="w-3 h-3" /> Cartas Leídas</span>
+               <span className={`font-bold text-xl ${totalCards >= 98 && totalCards <= 100 ? 'text-emerald-400' : 'text-yellow-400'}`}>{totalCards} / 100</span>
+             </div>
+             <div className="flex flex-col bg-gray-900 border border-gray-800 px-5 py-3 rounded-xl">
+               <span className="text-xs text-emerald-400/80 uppercase font-bold tracking-wider mb-1">Valor Total (CK)</span>
+               <span className="font-bold text-xl text-emerald-400 flex items-center gap-1"><DollarSign className="w-5 h-5" /> {totalPriceCK.toFixed(2)}</span>
+             </div>
+             <div className="flex flex-col bg-blue-900/20 border border-blue-500/30 px-5 py-3 rounded-xl focus-within:border-blue-500/80 transition-colors">
+               <span className="text-xs text-blue-400/80 uppercase font-bold tracking-wider mb-1">Target Liga (Enter)</span>
+               <div className="flex items-center gap-1">
+                 <DollarSign className="w-5 h-5 text-blue-400" />
+                 <input type="number" value={targetBudget} onChange={(e) => setTargetBudget(Number(e.target.value))} onKeyDown={handleBudgetSubmit} className="bg-transparent font-bold text-xl text-blue-400 w-24 focus:outline-none" />
+               </div>
+            </div>
           </div>
         </div>
 
-        {commander && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-12 relative overflow-hidden rounded-2xl border border-yellow-500/30 shadow-2xl shadow-yellow-500/10 group"
-          >
-            <div 
-              className="absolute inset-0 bg-cover bg-center opacity-30 group-hover:opacity-40 transition-opacity duration-500"
-              style={{ backgroundImage: `url(${commander.image_uris?.art_crop})` }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-r from-gray-950 via-gray-950/80 to-transparent" />
-            
-            <div className="relative z-10 p-8 md:p-10 flex flex-col sm:flex-row items-center sm:items-start gap-8">
-              <img 
-                src={commander.image_uris?.normal} 
-                alt={commander.name} 
-                className="w-48 sm:w-56 rounded-xl shadow-2xl rotate-[-2deg] group-hover:rotate-0 transition-transform duration-500 border border-gray-700"
-              />
-              <div className="flex flex-col justify-center h-full pt-4 text-center sm:text-left w-full sm:w-auto">
-                <span className="text-yellow-500 font-bold tracking-widest text-xs uppercase mb-2 flex items-center justify-center sm:justify-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                  {t.commanderTitle}
-                </span>
-                <h2 className="text-4xl sm:text-5xl font-extrabold text-white mb-2">{commander.name}</h2>
-                <p className="text-gray-400 font-medium mb-6">{commander.type_line}</p>
-                <div className="w-full sm:w-72">
-                   <CardPrices card={commander} />
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
+        {commander && <CommanderHero commander={commander} />}
 
-        <div>
-          <h3 className="text-2xl font-bold mb-6 flex items-center gap-3 border-b border-gray-800 pb-4">
-            <TrendingDown className="text-red-400 w-6 h-6" />
-            {t.suggestedCuts}
-          </h3>
-
-          <div className="flex flex-col gap-8">
-            {suggestions.map((pair, idx) => (
-              <motion.div 
-                key={idx}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.15 }}
-                className="bg-gray-900 border border-gray-800 rounded-2xl p-6 relative overflow-hidden"
-              >
-                <div className="flex flex-col lg:flex-row items-center gap-8 relative z-10">
-                  
-                  {/* CARTA A CORTAR */}
-                  <div className="flex-1 flex flex-col items-center w-full">
-                    <div className="relative">
-                      <div className="absolute inset-0 bg-red-500/20 blur-xl rounded-full" />
-                      <img 
-                        src={pair.cutCard.image_uris?.normal} 
-                        alt={pair.cutCard.name} 
-                        className="w-48 rounded-xl border-2 border-red-500/50 relative z-10 hover:scale-105 transition-transform cursor-pointer shadow-lg shadow-red-900/20"
-                      />
-                    </div>
-                    <div className="mt-4 text-center w-full sm:w-72">
-                      <p className="font-bold text-red-400 text-lg mb-1">{pair.cutCard.name}</p>
-                      <CardPrices card={pair.cutCard} />
-                    </div>
-                  </div>
-
-                  {/* FLECHA */}
-                  <div className="flex flex-col items-center justify-center shrink-0">
-                    <div className="bg-gray-950 border border-gray-800 p-4 rounded-full shadow-inner mb-2 my-4 lg:my-0">
-                      <ArrowRight className="w-8 h-8 text-gray-400 hidden lg:block" />
-                      <ArrowRight className="w-8 h-8 text-gray-400 rotate-90 lg:hidden" />
-                    </div>
-                    <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{t.replaceWith}</span>
-                  </div>
-
-                  {/* CARTA NUEVA */}
-                  <div className="flex-1 flex flex-col items-center w-full">
-                    <div className="relative">
-                      <div className="absolute inset-0 bg-emerald-500/20 blur-xl rounded-full" />
-                      <img 
-                        src={pair.addCard.image_uris?.normal} 
-                        alt={pair.addCard.name} 
-                        className="w-48 rounded-xl border-2 border-emerald-500/50 relative z-10 hover:scale-105 transition-transform cursor-pointer shadow-lg shadow-emerald-900/20"
-                      />
-                    </div>
-                    <div className="mt-4 text-center w-full sm:w-72">
-                      <p className="font-bold text-emerald-400 text-lg mb-1">{pair.addCard.name}</p>
-                      <CardPrices card={pair.addCard} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* JUSTIFICACIÓN */}
-                <div className="mt-8 pt-6 border-t border-gray-800 relative z-10">
-                  <div className="flex items-start gap-3">
-                    <RefreshCcw className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold text-gray-200 block mb-1">{t.cutReason}</span>
-                      <p className="text-gray-400 leading-relaxed text-sm md:text-base">
-                        {pair.reason}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </div>
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-12">
+          <InventoryTable deckList={deckList} onCardClick={setSelectedCard} />
+          <BrokerPanel suggestions={suggestions} isCalculating={isCalculating} targetBudget={targetBudget} totalPriceCK={totalPriceCK} />
         </div>
 
       </main>
+
+      <CardModal card={selectedCard} onClose={() => setSelectedCard(null)} />
     </div>
   );
 }
 
 export default function DeckPage() {
-  return (
-    <LanguageProvider>
-      <DeckContent />
-    </LanguageProvider>
-  );
+  return <LanguageProvider><DeckContent /></LanguageProvider>;
 }
