@@ -12,6 +12,7 @@ export interface DeckCard {
   setName: string;
   edhrecRank: number;
   type_line: string;
+  synergy: number; // NUEVO: Porcentaje de Sinergia
 }
 
 export interface SuggestionPair {
@@ -19,6 +20,8 @@ export interface SuggestionPair {
   addCard: ScryfallCard;
   reason: string;
   category: string;
+  synergyAdd: number; // Sinergia de la carta recomendada
+  synergyCut: number; // Sinergia de la carta eliminada
 }
 
 export interface DeckData {

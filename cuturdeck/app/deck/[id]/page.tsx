@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2, AlertCircle, Layers, ExternalLink, DollarSign } from 'lucide-react';
+import { Loader2, AlertCircle, Layers, ExternalLink, DollarSign, Settings2, CheckCircle2 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { LanguageProvider, useLanguage } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
 import { getCardByName, ScryfallCard } from '@/lib/scryfall';
-import { DeckCard, SuggestionPair, DeckData } from '@/lib/types';
+import { DeckCard, DeckData } from '@/lib/types';
 
 import CommanderHero from '@/components/deck/CommanderHero';
 import InventoryTable from '@/components/deck/InventoryTable';
@@ -23,6 +23,22 @@ const BASIC_LANDS = new Set([
   'Wastes'
 ]);
 
+export const getBroadType = (typeLine: string) => {
+  const tl = typeLine.toLowerCase();
+  if (tl.includes('creature')) return 'Creature';
+  if (tl.includes('instant')) return 'Instant';
+  if (tl.includes('sorcer')) return 'Sorcery';
+  if (tl.includes('enchantment')) return 'Enchantment';
+  if (tl.includes('planeswalker')) return 'Planeswalker';
+  if (tl.includes('artifact')) return 'Artifact';
+  if (tl.includes('land')) return 'Land';
+  return 'Other';
+};
+
+export default function DeckPage() {
+  return <LanguageProvider><DeckContent /></LanguageProvider>;
+}
+
 function DeckContent() {
   const { t } = useLanguage();
   const params = useParams();
@@ -33,103 +49,24 @@ function DeckContent() {
   const [deckList, setDeckList] = useState<DeckCard[]>([]);
   const [totalCards, setTotalCards] = useState<number>(0);
   const [totalPriceCK, setTotalPriceCK] = useState<number>(0);
-  const [targetBudget, setTargetBudget] = useState<number>(160);
   
-  const [suggestions, setSuggestions] = useState<SuggestionPair[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isCalculating, setIsCalculating] = useState(false);
-  const [error, setError] = useState('');
+  const [targetBudget, setTargetBudget] = useState<number>(160);
+  const [showConfig, setShowConfig] = useState(false);
+  const [targetStructure, setTargetStructure] = useState<Record<string, number>>({
+    Creature: 0, Instant: 0, Sorcery: 0, Artifact: 0, Enchantment: 0, Planeswalker: 0, Land: 0, Other: 0
+  });
 
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
   const [selectedCard, setSelectedCard] = useState<DeckCard | null>(null);
 
-  // --- MOTOR DEL ALGORITMO CUTTER PRO ---
-  const calculateCuts = useCallback(async (cards: DeckCard[], budget: number, currentTotal: number) => {
-    setIsCalculating(true);
-    const budgetGap = budget - currentTotal;
-    const newSuggestions: SuggestionPair[] = [];
-
-    try {
-      if (budgetGap < 0) {
-        const candidatesToRemove = cards
-          .filter(c => c.ckPrice > 3.0 && !c.isCommander)
-          .sort((a, b) => (b.edhrecRank || 0) - (a.edhrecRank || 0));
-
-        const budgetAlternatives = ["Negate", "Cultivate", "Swords to Plowshares", "Sign in Blood", "Naturalize"];
-        
-        for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
-          const cutCard = candidatesToRemove[i];
-          const altCard = await getCardByName(budgetAlternatives[i % budgetAlternatives.length]);
-          
-          if (altCard) {
-            // FETCH EN TIEMPO REAL DEL PRECIO EN CARD KINGDOM
-            try {
-              const proxyRes = await fetch(`/api/proxy?platform=moxfield-card&q=${encodeURIComponent(altCard.name)}`);
-              if (proxyRes.ok) {
-                const moxData = await proxyRes.json();
-                if (moxData.data && moxData.data.length > 0) {
-                  const ckPrice = moxData.data[0].prices?.ck;
-                  // Sobrescribimos el precio de Scryfall (usd) con el de CK para que el BrokerPanel lo muestre correcto
-                  if (ckPrice) altCard.prices.usd = String(ckPrice);
-                }
-              }
-            } catch (err) {
-              console.warn("No se pudo obtener el precio CK para la sugerencia, usando fallback TCGPlayer", err);
-            }
-
-            newSuggestions.push({
-              cutCard, addCard: altCard, category: "Corte de Presupuesto",
-              reason: `Eficiencia Baja: ${cutCard.name} cuesta $${cutCard.ckPrice.toFixed(2)} pero tiene un ranking EDHREC pobre (${cutCard.edhrecRank || 'N/A'}).`
-            });
-          }
-        }
-      } else {
-        const candidatesToRemove = cards
-          .filter(c => c.ckPrice > 0 && c.ckPrice < 2.0 && !c.isCommander && !c.type_line.toLowerCase().includes("land"))
-          .sort((a, b) => (b.edhrecRank || 0) - (a.edhrecRank || 0));
-
-        const premiumStaples = ["Rhystic Study", "Demonic Tutor", "Teferi's Protection", "Cyclonic Rift", "Smothering Tithe"];
-        
-        for (let i = 0; i < Math.min(5, candidatesToRemove.length); i++) {
-          const cutCard = candidatesToRemove[i];
-          const stapleCard = await getCardByName(premiumStaples[i % premiumStaples.length]);
-          
-          if (stapleCard) {
-            // FETCH EN TIEMPO REAL DEL PRECIO EN CARD KINGDOM
-            try {
-              const proxyRes = await fetch(`/api/proxy?platform=moxfield-card&q=${encodeURIComponent(stapleCard.name)}`);
-              if (proxyRes.ok) {
-                const moxData = await proxyRes.json();
-                if (moxData.data && moxData.data.length > 0) {
-                  const ckPrice = moxData.data[0].prices?.ck;
-                  if (ckPrice) stapleCard.prices.usd = String(ckPrice);
-                }
-              }
-            } catch (err) {
-              console.warn("No se pudo obtener el precio CK para la sugerencia, usando fallback TCGPlayer", err);
-            }
-
-            newSuggestions.push({
-              cutCard, addCard: stapleCard, category: "Upgrade de Poder",
-              reason: `Inversión: ${cutCard.name} es el eslabón débil de tu mazo. Aprovecha el margen de $${budgetGap.toFixed(2)} para incluir una pieza central ganadora.`
-            });
-          }
-        }
-      }
-      setSuggestions(newSuggestions);
-    } catch (e) {
-      console.error("Error calculando sugerencias", e);
-    } finally {
-      setIsCalculating(false);
-    }
-  }, []);
-
   useEffect(() => {
-    async function fetchDeckAndAnalysis() {
+    async function fetchDeckBase() {
       if (!deckId) return;
 
       try {
         const { data: dbDeck, error: dbError } = await supabase.from('decks').select('id, platform, raw_data').eq('id', deckId).single();
-        if (dbError || !dbDeck) throw new Error(t.deckNotFound || "Mazo no encontrado");
+        if (dbError || !dbDeck) throw new Error(t.deckNotFound || "Mazo no encontrado en la base de datos.");
         setDeck(dbDeck);
 
         let commanderName = '';
@@ -142,20 +79,21 @@ function DeckContent() {
           if (cardMap.has(mapKey)) {
             cardMap.get(mapKey)!.quantity += quantity;
           } else {
-            cardMap.set(mapKey, { id, scryfallId, name, quantity, ckPrice, imageUrl, isCommander: isCmd, isFoil, setName, edhrecRank: 999999, type_line: typeLine });
+            cardMap.set(mapKey, { 
+              id, scryfallId, name, quantity, ckPrice, imageUrl, isCommander: isCmd, isFoil, setName, type_line: typeLine, 
+              edhrecRank: 999999, 
+              synergy: 0 
+            });
           }
         };
 
-        let rawCardsData: any[] = [];
         const cacheBuster = Date.now();
 
         if (dbDeck.platform === 'moxfield') {
           const match = dbDeck.raw_data.match(/decks\/([a-zA-Z0-9_-]+)/);
           if (!match) throw new Error("URL inválida de Moxfield");
-          
           const res = await fetch(`/api/proxy?platform=moxfield&deckId=${match[1]}&cb=${cacheBuster}`);
-          if (!res.ok) throw new Error("No se pudo conectar con Moxfield mediante el Proxy");
-          
+          if (!res.ok) throw new Error("No se pudo conectar con Moxfield");
           const moxData = await res.json();
 
           const processMoxCard = (item: any, isCmd: boolean) => {
@@ -163,26 +101,21 @@ function DeckContent() {
             const quantity = Number(item.count ?? item.quantity ?? 1);
             const isFoil = item.finish === 'foil' || item.isFoil === true;
             const isBasic = BASIC_LANDS.has(name);
-            
             const priceNormal = Number(item.card?.prices?.ck || 0);
             const rawPrice = isFoil ? (Number(item.card?.prices?.ck_foil || 0) > 0 ? Number(item.card?.prices?.ck_foil) : priceNormal) : priceNormal;
             const ckPrice = isBasic ? 0 : rawPrice;
 
-            rawCardsData.push({ name });
             addCardToMap(name, quantity, ckPrice, item.card?.image_uris?.normal || item.card?.card_faces?.[0]?.image_uris?.normal || "", isCmd, item.card?.id || name, isFoil, item.card?.scryfall_id || item.card?.id || "", item.card?.set_name || item.card?.set?.toUpperCase() || "Desconocida", item.card?.type_line || "Desconocido");
             if (isCmd && !commanderName) commanderName = name;
           };
 
           if (moxData.commanders) Object.values(moxData.commanders).forEach((c: any) => processMoxCard(c, true));
           if (moxData.mainboard) Object.values(moxData.mainboard).forEach((c: any) => processMoxCard(c, false));
-        
         } else if (dbDeck.platform === 'archidekt') {
           const match = dbDeck.raw_data.match(/decks\/(\d+)/);
           if (!match) throw new Error("URL inválida de Archidekt");
-          
           const res = await fetch(`/api/proxy?platform=archidekt&deckId=${match[1]}&cb=${cacheBuster}`);
-          if (!res.ok) throw new Error("No se pudo conectar con Archidekt mediante el Proxy");
-          
+          if (!res.ok) throw new Error("No se pudo conectar con Archidekt");
           const archData = await res.json();
 
           archData.cards.forEach((item: any) => {
@@ -191,46 +124,41 @@ function DeckContent() {
             const quantity = Number(item.quantity ?? item.count ?? 1);
             const isFoil = item.modifier === 'Foil' || item.modifier === 'Foil Etched';
             const isBasic = BASIC_LANDS.has(name);
-
             const priceNormal = Number(item.card?.prices?.ck || 0);
             const rawPrice = isFoil ? (Number(item.card?.prices?.ck_foil || 0) > 0 ? Number(item.card?.prices?.ck_foil) : priceNormal) : priceNormal;
             const ckPrice = isBasic ? 0 : rawPrice;
 
-            rawCardsData.push({ name });
             addCardToMap(name, quantity, ckPrice, item.card?.image_uris?.normal || item.card?.card_faces?.[0]?.image_uris?.normal || "", isCmd, item.card?.uid || name, isFoil, item.card?.uid || "", item.card?.edition?.editionname || item.card?.edition?.editioncode?.toUpperCase() || "Desconocida", item.card?.oracleCard?.typeLine || item.card?.type_line || "Desconocido");
             if (isCmd && !commanderName) commanderName = name;
           });
         }
 
-        const uniqueNames = Array.from(new Set(rawCardsData.map(c => c.name)));
-        const rankMap = new Map<string, number>();
-        for (let i = 0; i < uniqueNames.length; i += 75) {
-          const chunk = uniqueNames.slice(i, i + 75).map(n => ({ name: n }));
-          const sfRes = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiers: chunk }) });
-          if (sfRes.ok) {
-            const sfData = await sfRes.json();
-            sfData.data.forEach((card: any) => rankMap.set(card.name, card.edhrec_rank || 999999));
-          }
-        }
+        const parsedList = Array.from(cardMap.values());
+        
+        const initialStructure: Record<string, number> = {
+          Creature: 0, Instant: 0, Sorcery: 0, Artifact: 0, Enchantment: 0, Planeswalker: 0, Land: 0, Other: 0
+        };
 
-        const parsedList = Array.from(cardMap.values()).map(card => {
+        parsedList.forEach(card => {
           cardsCount += card.quantity;
           deckPriceSum += (card.ckPrice * card.quantity);
-          return { ...card, edhrecRank: rankMap.get(card.name) || 999999 };
+          if (!card.isCommander) {
+            const bType = getBroadType(card.type_line);
+            initialStructure[bType] += card.quantity;
+          }
         });
-
+        
         parsedList.sort((a, b) => b.ckPrice - a.ckPrice);
 
         setDeckList(parsedList);
         setTotalCards(cardsCount);
         setTotalPriceCK(deckPriceSum);
+        setTargetStructure(initialStructure);
 
         if (commanderName) {
           const cmdData = await getCardByName(commanderName);
           if (cmdData) setCommander(cmdData);
         }
-
-        calculateCuts(parsedList, targetBudget, deckPriceSum);
 
       } catch (err: any) {
         console.error(err);
@@ -240,17 +168,21 @@ function DeckContent() {
       }
     }
 
-    fetchDeckAndAnalysis();
-  }, [deckId, t, targetBudget, calculateCuts]);
+    fetchDeckBase();
+  }, [deckId, t]);
 
-  const handleBudgetSubmit = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') calculateCuts(deckList, targetBudget, totalPriceCK);
+  const handleStructureChange = (type: string, value: number) => {
+    setTargetStructure(prev => ({ ...prev, [type]: value }));
   };
+
+  const totalTargetCards = useMemo(() => {
+    return Object.values(targetStructure).reduce((a, b) => a + b, 0) + (commander ? 1 : 0);
+  }, [targetStructure, commander]);
 
   if (isLoading) return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center">
       <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mb-4" />
-      <p className="text-gray-400 font-medium">Sincronizando con Scryfall y Card Kingdom...</p>
+      <p className="text-gray-400 font-medium">Analizando estructura del mazo...</p>
     </div>
   );
 
@@ -269,35 +201,89 @@ function DeckContent() {
       <Navbar />
       <main className="max-w-6xl mx-auto px-6 pt-10">
         
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white mb-2">Análisis del Mazo</h1>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white mb-2">Análisis de Estructura</h1>
             <p className="text-sm text-gray-400 flex items-center gap-2">Origen: <a href={deck.raw_data} target="_blank" rel="noreferrer" className="capitalize text-emerald-400 hover:text-emerald-300 font-medium underline-offset-2 hover:underline flex items-center gap-1">{deck.platform} <ExternalLink className="w-3 h-3" /></a></p>
           </div>
-          <div className="flex items-center gap-3">
-             <div className="flex flex-col bg-gray-900 border border-gray-800 px-5 py-3 rounded-xl">
-               <span className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1 flex items-center gap-1"><Layers className="w-3 h-3" /> Cartas Leídas</span>
-               <span className={`font-bold text-xl ${totalCards >= 98 && totalCards <= 100 ? 'text-emerald-400' : 'text-yellow-400'}`}>{totalCards} / 100</span>
-             </div>
+          <div className="flex flex-wrap items-center gap-3">
              <div className="flex flex-col bg-gray-900 border border-gray-800 px-5 py-3 rounded-xl">
                <span className="text-xs text-emerald-400/80 uppercase font-bold tracking-wider mb-1">Valor Total (CK)</span>
                <span className="font-bold text-xl text-emerald-400 flex items-center gap-1"><DollarSign className="w-5 h-5" /> {totalPriceCK.toFixed(2)}</span>
              </div>
+             
              <div className="flex flex-col bg-blue-900/20 border border-blue-500/30 px-5 py-3 rounded-xl focus-within:border-blue-500/80 transition-colors">
-               <span className="text-xs text-blue-400/80 uppercase font-bold tracking-wider mb-1">Target Liga (Enter)</span>
+               <span className="text-xs text-blue-400/80 uppercase font-bold tracking-wider mb-1">Target Liga</span>
                <div className="flex items-center gap-1">
                  <DollarSign className="w-5 h-5 text-blue-400" />
-                 <input type="number" value={targetBudget} onChange={(e) => setTargetBudget(Number(e.target.value))} onKeyDown={handleBudgetSubmit} className="bg-transparent font-bold text-xl text-blue-400 w-24 focus:outline-none" />
+                 <input 
+                   type="number" 
+                   value={targetBudget} 
+                   onChange={(e) => setTargetBudget(Number(e.target.value))} 
+                   className="bg-transparent font-bold text-xl text-blue-400 w-24 focus:outline-none" 
+                 />
                </div>
             </div>
+
+            <button 
+              onClick={() => setShowConfig(!showConfig)}
+              className={`flex items-center gap-2 px-5 py-4 rounded-xl font-bold transition-all border ${showConfig ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-900/50' : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}
+            >
+              <Settings2 className="w-5 h-5" />
+              Blueprint
+            </button>
           </div>
         </div>
 
+        {showConfig && (
+          <div className="bg-gray-900 border border-purple-500/30 rounded-2xl p-6 mb-8 shadow-2xl animate-in slide-in-from-top-4 fade-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-lg font-bold text-purple-400 flex items-center gap-2">
+                  <Layers className="w-5 h-5" /> Blueprint del Mazo
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">Define cuántas cartas exactas quieres de cada tipo. El Broker rebalanceará el mazo por ti.</p>
+              </div>
+              <div className={`px-4 py-2 rounded-lg font-mono font-bold text-lg flex items-center gap-2 border ${totalTargetCards === 100 ? 'bg-emerald-900/30 text-emerald-400 border-emerald-500/50' : 'bg-red-900/30 text-red-400 border-red-500/50'}`}>
+                {totalTargetCards === 100 && <CheckCircle2 className="w-5 h-5" />}
+                Total: {totalTargetCards}/100
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+              {['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker'].map((type) => (
+                <div key={type} className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+                  <label className="text-xs text-gray-500 font-bold uppercase tracking-wider block mb-2">{type === 'Land' ? 'Tierras' : type}</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={targetStructure[type]} 
+                    onChange={(e) => handleStructureChange(type, Number(e.target.value) || 0)}
+                    className="w-full bg-transparent text-white font-bold text-xl border-b border-gray-700 focus:border-purple-500 focus:outline-none pb-1"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {commander && <CommanderHero commander={commander} />}
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-12">
-          <InventoryTable deckList={deckList} onCardClick={setSelectedCard} />
-          <BrokerPanel suggestions={suggestions} isCalculating={isCalculating} targetBudget={targetBudget} totalPriceCK={totalPriceCK} />
+        <div className="flex flex-col gap-10 mb-12">
+          <div className="w-full">
+            <InventoryTable deckList={deckList} onCardClick={setSelectedCard} />
+          </div>
+          
+          <div className="w-full">
+            <BrokerPanel 
+              deckList={deckList} 
+              commander={commander} 
+              targetBudget={targetBudget} 
+              totalPriceCK={totalPriceCK} 
+              targetStructure={targetStructure} 
+              onCardClick={setSelectedCard} // Pasamos el control del modal al Broker
+            />
+          </div>
         </div>
 
       </main>
@@ -305,8 +291,4 @@ function DeckContent() {
       <CardModal card={selectedCard} onClose={() => setSelectedCard(null)} />
     </div>
   );
-}
-
-export default function DeckPage() {
-  return <LanguageProvider><DeckContent /></LanguageProvider>;
 }
