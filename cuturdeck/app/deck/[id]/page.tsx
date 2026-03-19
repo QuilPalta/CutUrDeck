@@ -230,23 +230,25 @@ function DeckContent() {
               className={`flex items-center gap-2 px-5 py-4 rounded-xl font-bold transition-all border ${showConfig ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-900/50' : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}
             >
               <Settings2 className="w-5 h-5" />
-              Blueprint
+              Distribución
             </button>
           </div>
         </div>
 
         {showConfig && (
           <div className="bg-gray-900 border border-purple-500/30 rounded-2xl p-6 mb-8 shadow-2xl animate-in slide-in-from-top-4 fade-in duration-200">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
               <div>
                 <h3 className="text-lg font-bold text-purple-400 flex items-center gap-2">
-                  <Layers className="w-5 h-5" /> Blueprint del Mazo
+                  <Layers className="w-5 h-5" /> Distribución del Mazo
                 </h3>
                 <p className="text-sm text-gray-400 mt-1">Define cuántas cartas exactas quieres de cada tipo. El Broker rebalanceará el mazo por ti.</p>
               </div>
-              <div className={`px-4 py-2 rounded-lg font-mono font-bold text-lg flex items-center gap-2 border ${totalTargetCards === 100 ? 'bg-emerald-900/30 text-emerald-400 border-emerald-500/50' : 'bg-red-900/30 text-red-400 border-red-500/50'}`}>
-                {totalTargetCards === 100 && <CheckCircle2 className="w-5 h-5" />}
-                Total: {totalTargetCards}/100
+              <div className="flex items-center gap-3">
+                <div className={`px-4 py-2 rounded-lg font-mono font-bold text-lg flex items-center gap-2 border ${totalTargetCards === 100 ? 'bg-emerald-900/30 text-emerald-400 border-emerald-500/50' : 'bg-red-900/30 text-red-400 border-red-500/50'}`}>
+                  {totalTargetCards === 100 && <CheckCircle2 className="w-5 h-5" />}
+                  Total: {totalTargetCards}/100
+                </div>
               </div>
             </div>
 
@@ -281,7 +283,7 @@ function DeckContent() {
               targetBudget={targetBudget} 
               totalPriceCK={totalPriceCK} 
               targetStructure={targetStructure} 
-              onCardClick={setSelectedCard} // Pasamos el control del modal al Broker
+              onCardClick={setSelectedCard}
             />
           </div>
         </div>

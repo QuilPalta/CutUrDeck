@@ -44,11 +44,8 @@ const getCardImageUrl = (card: ScryfallCard) => {
   return card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || '';
 };
 
-// FIX 1: Función de respaldo para obtener la imagen de las cartas a cortar (DeckCard)
 const getDeckCardImageUrl = (card: DeckCard) => {
   if (card.imageUrl && card.imageUrl.trim() !== '') return card.imageUrl;
-  
-  // Si no hay imagen en el mazo base, le pedimos a Scryfall que nos dé la foto exacta por nombre
   const frontFace = card.name.split('//')[0].trim();
   return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(frontFace)}&format=image&version=normal`;
 };
@@ -266,7 +263,7 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
         <div className="absolute inset-0 z-20 bg-gray-900/80 backdrop-blur-sm flex flex-col items-center justify-center">
           <Loader2 className="w-8 h-8 text-gray-400 animate-spin mb-3" />
           <p className="text-gray-400 text-sm font-medium">
-            {isFetchingEDHREC ? "Sincronizando Base de Datos..." : "Procesando Estructura..."}
+            {isFetchingEDHREC ? "Sincronizando Base de Datos..." : "Ajustando Distribución Multiobjetivo..."}
           </p>
         </div>
       )}
@@ -283,18 +280,15 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
           {suggestions.map((pair, idx) => (
             <div key={idx} className="bg-gray-950 border border-gray-800/80 rounded-2xl p-6 flex flex-row items-center justify-between w-full hover:border-gray-700 transition-colors group">
               
-              {/* Columna Izquierda: CARTA A CORTAR (1/3) */}
               <div 
                 className="flex flex-col items-center flex-1 cursor-pointer"
                 onClick={() => onCardClick(pair.cutCard)}
               >
                 <div className="w-48 mb-3 overflow-hidden rounded-xl shadow-lg ring-1 ring-gray-800 transition-all group-hover:opacity-70">
                   <img 
-                    // FIX 2: Se usa la función de respaldo aquí
                     src={getDeckCardImageUrl(pair.cutCard)} 
                     alt={pair.cutCard.name}
                     className="w-full h-auto object-cover"
-                    // FIX 3: Si la imagen realmente falla (error 404), mostramos el reverso de una carta
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = 'https://cards.scryfall.io/large/back/0/a/0aeebaf5-8c7d-4636-9e82-8c27447861f7.jpg';
                     }}
@@ -306,12 +300,10 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
                 </span>
               </div>
               
-              {/* Columna Central: FLECHA (1/3) */}
               <div className="flex flex-col items-center justify-center flex-1 px-4">
                 <ArrowRight className="w-8 h-8 text-gray-700" />
               </div>
               
-              {/* Columna Derecha: CARTA A AÑADIR (1/3) */}
               <div 
                 className="flex flex-col items-center flex-1 cursor-pointer"
                 onClick={() => onCardClick(mapScryfallToDeckCard(pair.addCard, Number(pair.addCard.prices?.usd || 0)))}
@@ -321,7 +313,6 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
                     src={getCardImageUrl(pair.addCard)} 
                     alt={pair.addCard.name}
                     className="w-full h-auto object-cover"
-                    // FIX 3: Respaldo también para la carta sugerida
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = 'https://cards.scryfall.io/large/back/0/a/0aeebaf5-8c7d-4636-9e82-8c27447861f7.jpg';
                     }}
@@ -340,7 +331,7 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
         !isFetchingEDHREC && !isCalculating && (
           <div className="flex flex-col items-center justify-center py-20 text-gray-600">
             <Layers className="w-16 h-16 text-gray-800 mb-4" />
-            <p className="text-lg">Configuración de mazo estable.</p>
+            <p className="text-lg">Tu mazo cumple a la perfección con la distribución y el presupuesto.</p>
           </div>
         )
       )}

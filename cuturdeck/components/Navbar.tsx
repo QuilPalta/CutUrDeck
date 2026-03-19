@@ -1,15 +1,22 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { User, Menu, Globe, Settings, LogOut, LayoutDashboard, Crown } from 'lucide-react';
 import { useLanguage, Language } from '@/lib/i18n';
 import SearchInput from './SearchInput';
 import Select from './Select';
 import Dropdown, { DropdownItem } from './Dropdown';
+import { supabase } from '@/lib/supabase';
 
 export default function Navbar() {
   const { t, language, setLanguage } = useLanguage();
+  const router = useRouter();
+
+  // Estados de Supabase
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
 
   const languageOptions = [
     { value: 'es', label: 'ES' },
@@ -19,14 +26,48 @@ export default function Navbar() {
     { value: 'de', label: 'DE' },
   ];
 
+  // Escuchar la sesión de Supabase al cargar
+  useEffect(() => {
+    const fetchSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user || null);
+      if (session?.user) fetchProfile(session.user.id);
+    };
+
+    fetchSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+      if (session?.user) {
+        fetchProfile(session.user.id);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchProfile = async (userId: string) => {
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (data) setProfile(data);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/');
+    router.refresh();
+  };
+
+  // Dinámico: Redirige a /profile/tu_nickname si existe, sino a /profile
   const userMenuItems: DropdownItem[] = [
-    { label: 'Mi Perfil', icon: <User className="w-4 h-4" />, href: '/profile' },
+    { label: 'Mi Perfil', icon: <User className="w-4 h-4" />, href: profile?.nickname ? `/profile/${profile.nickname}` : '/profile' },
     { label: 'Panel de Control', icon: <LayoutDashboard className="w-4 h-4" />, href: '/dashboard' },
     { label: 'Mejorar a Premium', icon: <Crown className="w-4 h-4 text-yellow-500" />, href: '/premium' },
     { divider: true, label: '' },
     { label: 'Ajustes', icon: <Settings className="w-4 h-4" />, href: '/settings' },
     { divider: true, label: '' },
-    { label: 'Cerrar Sesión', icon: <LogOut className="w-4 h-4" />, danger: true, onClick: () => console.log('Cerrando sesión...') },
+    { label: 'Cerrar Sesión', icon: <LogOut className="w-4 h-4" />, danger: true, onClick: handleLogout },
   ];
 
   return (
@@ -56,15 +97,29 @@ export default function Navbar() {
           size="md"
         />
 
-        <Dropdown 
-          align="right"
-          trigger={
-            <button className="p-2 bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-lg transition-colors text-gray-300">
-              <User className="w-5 h-5" />
-            </button>
-          }
-          items={userMenuItems}
-        />
+        {/* Lógica de Renderizado Condicional de Sesión */}
+        {user ? (
+          <Dropdown 
+            align="right"
+            trigger={
+              <button className="p-2 bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-lg transition-colors text-gray-300 flex items-center justify-center overflow-hidden">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} alt="Avatar" className="w-5 h-5 rounded-full object-cover" />
+                ) : (
+                  <User className="w-5 h-5" />
+                )}
+              </button>
+            }
+            items={userMenuItems}
+          />
+        ) : (
+          <Link 
+            href="/login" 
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 border border-purple-500 rounded-lg text-sm font-bold transition-colors"
+          >
+            Iniciar Sesión
+          </Link>
+        )}
 
         <button className="md:hidden p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-300">
           <Menu className="w-5 h-5" />
