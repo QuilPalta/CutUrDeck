@@ -2,15 +2,18 @@
 
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, AlertCircle, X, BookOpen, Gavel } from 'lucide-react';
+import { Loader2, AlertCircle, X, BookOpen, Gavel, Lock, LockOpen } from 'lucide-react';
 import { DeckCard } from '@/lib/types';
 
 interface CardModalProps {
   card: DeckCard | null;
   onClose: () => void;
+  isPinned?: boolean;
+  onTogglePin?: (cardName: string) => void;
+  isOwner?: boolean;
 }
 
-export default function CardModal({ card, onClose }: CardModalProps) {
+export default function CardModal({ card, onClose, isPinned = false, onTogglePin, isOwner = false }: CardModalProps) {
   const [cardDetails, setCardDetails] = useState<any>(null);
   const [cardRulings, setCardRulings] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -65,13 +68,25 @@ export default function CardModal({ card, onClose }: CardModalProps) {
             <>
               <div className="w-full md:w-2/5 p-6 bg-gray-950/50 flex flex-col items-center justify-start border-r border-gray-800">
                 <img src={cardDetails.image_uris?.normal || cardDetails.card_faces?.[0]?.image_uris?.normal || card.imageUrl} alt={cardDetails.name} className="w-full max-w-sm rounded-xl shadow-lg border border-gray-700" />
+                
                 <div className="mt-6 w-full space-y-3">
                   <div className="bg-gray-900 border border-gray-700 p-3 rounded-lg flex justify-between items-center">
                     <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Tu Precio (CK)</span>
                     <span className="text-lg text-emerald-400 font-mono font-bold">${card.ckPrice.toFixed(2)}</span>
                   </div>
+                  
+                  {isOwner && onTogglePin && (
+                    <button 
+                      onClick={() => onTogglePin(card.name)}
+                      className={`w-full flex items-center justify-center gap-2 p-3 rounded-lg font-bold transition-colors border ${isPinned ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20' : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700 hover:text-white'}`}
+                    >
+                      {isPinned ? <Lock className="w-5 h-5" /> : <LockOpen className="w-5 h-5" />}
+                      {isPinned ? 'Carta Protegida' : 'Proteger del Broker'}
+                    </button>
+                  )}
                 </div>
               </div>
+
               <div className="w-full md:w-3/5 p-6 overflow-y-auto custom-scrollbar">
                 <div className="mb-6">
                   <h2 className="text-3xl font-extrabold text-white mb-1 flex items-center justify-between">{cardDetails.name}<span className="text-xl font-mono text-gray-400">{cardDetails.mana_cost}</span></h2>
