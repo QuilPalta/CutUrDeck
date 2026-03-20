@@ -1,4 +1,6 @@
 export interface ScryfallCard {
+  stapleCard: {};
+  card_faces: any;
   id: string;
   name: string;
   image_uris?: {
