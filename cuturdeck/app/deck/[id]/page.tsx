@@ -39,7 +39,6 @@ export const getBroadType = (typeLine: string) => {
   return 'Other';
 };
 
-// NUEVO MOTOR SEMÁNTICO: Detecta roles funcionales leyendo las reglas de la carta
 export const getCardTags = (oracleText: string, typeLine: string): string[] => {
   if (!oracleText && !typeLine) return [];
   const tags = new Set<string>();
@@ -111,7 +110,8 @@ function DeckContent() {
         const ownerCheck = currentUser?.id === dbDeck.profile_id;
         setIsOwner(ownerCheck);
 
-        if (ownerCheck) {
+        // CORRECCIÓN TYPESCRIPT: Verificamos explícitamente que currentUser exista
+        if (ownerCheck && currentUser) {
           const { data: prof } = await supabase.from('profiles').select('preferences').eq('id', currentUser.id).single();
           setProfile(prof);
           if (prof && (!prof.preferences || !prof.preferences.has_seen_tutorial)) {
@@ -124,17 +124,15 @@ function DeckContent() {
         let deckPriceSum = 0;
         const cardMap = new Map<string, DeckCard>();
 
-        // Añadimos el parámetro oracleText a la función map
         const addCardToMap = (name: string, quantity: number, ckPrice: number, imageUrl: string, isCmd: boolean, id: string, isFoil: boolean, scryfallId: string, setName: string, typeLine: string, oracleText: string) => {
           const mapKey = `${name}-${setName}-${isFoil ? 'foil' : 'normal'}`;
           
-          // Generamos los tags funcionales
           const functionalTags = getCardTags(oracleText, typeLine);
 
           if (cardMap.has(mapKey)) {
             cardMap.get(mapKey)!.quantity += quantity;
           } else {
-            // @ts-ignore - Inyectamos tags dinámicamente
+            // @ts-ignore
             cardMap.set(mapKey, { id, scryfallId, name, quantity, ckPrice, imageUrl, isCommander: isCmd, isFoil, setName, type_line: typeLine, edhrecRank: 999999, synergy: 0, tags: functionalTags });
           }
         };
