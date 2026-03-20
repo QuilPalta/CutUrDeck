@@ -5,7 +5,6 @@ import { Loader2, ArrowRight, Layers, AlertCircle, Scale, Lock, LockOpen, Thumbs
 import { DeckCard, SuggestionPair } from '@/lib/types';
 import { getCardByName, ScryfallCard } from '@/lib/scryfall';
 import { supabase } from '@/lib/supabase';
-// Importamos el analizador semántico del padre (o lo duplicamos para evitar errores de ciclo circular de módulos)
 import { getCardTags } from '@/app/deck/[id]/page';
 
 interface BrokerPanelProps {
@@ -55,22 +54,27 @@ const getDeckCardImageUrl = (card: DeckCard) => {
   return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(frontFace)}&format=image&version=normal`;
 };
 
-const mapScryfallToDeckCard = (scryfall: ScryfallCard, ckPrice: number): DeckCard => ({
-  id: scryfall.id,
-  scryfallId: scryfall.id,
-  name: scryfall.name,
-  quantity: 1,
-  ckPrice: ckPrice,
-  imageUrl: getCardImageUrl(scryfall),
-  isCommander: false,
-  isFoil: false,
-  setName: scryfall.set_name || '',
-  edhrecRank: 0,
-  type_line: scryfall.type_line || '',
-  synergy: 0,
-  // @ts-ignore
-  tags: getCardTags(scryfall.oracle_text || scryfall.card_faces?.[0]?.oracle_text || "", scryfall.type_line || "")
-});
+// Se castea como DeckCard pero permitimos que pase el linter aunque inyectemos 'tags'
+const mapScryfallToDeckCard = (scryfall: ScryfallCard, ckPrice: number): DeckCard => {
+  const baseCard = {
+    id: scryfall.id,
+    scryfallId: scryfall.id,
+    name: scryfall.name,
+    quantity: 1,
+    ckPrice: ckPrice,
+    imageUrl: getCardImageUrl(scryfall),
+    isCommander: false,
+    isFoil: false,
+    setName: scryfall.set_name || '',
+    edhrecRank: 0,
+    type_line: scryfall.type_line || '',
+    synergy: 0
+  };
+
+  const tags = getCardTags(scryfall.oracle_text || scryfall.card_faces?.[0]?.oracle_text || "", scryfall.type_line || "");
+  
+  return { ...baseCard, tags } as unknown as DeckCard;
+};
 
 interface FeedbackStats {
   likes: number;
@@ -80,15 +84,12 @@ interface FeedbackStats {
 
 export default function BrokerPanel({ deckList, commander, targetBudget, totalPriceCK, targetStructure, onCardClick, pinnedCards, onTogglePin }: BrokerPanelProps) {
   const [edhrecData, setEdhrecData] = useState<any[]>([]);
-  // @ts-ignore - Guardaremos la info enriquecida
   const [suggestions, setSuggestions] = useState<(SuggestionPair & { addTags?: string[] })[]>([]);
   const [isFetchingEDHREC, setIsFetchingEDHREC] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
   const [error, setError] = useState('');
 
-  // NUEVO: Switch del "Modo Evolución Flexible"
   const [isFlexibleMode, setIsFlexibleMode] = useState(false);
-
   const [feedbackStats, setFeedbackStats] = useState<Record<string, FeedbackStats>>({});
   const [currentUser, setCurrentUser] = useState<any>(null);
 
@@ -184,7 +185,7 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
     if (edhrecData.length === 0 || deckList.length === 0 || !commander) return;
     setIsCalculating(true);
 
-    const newSuggestions: any[] = [];
+    const newSuggestions: (SuggestionPair & { addTags?: string[] })[] = [];
     const currentStructure: Record<string, number> = { Creature: 0, Instant: 0, Sorcery: 0, Artifact: 0, Enchantment: 0, Planeswalker: 0, Land: 0, Other: 0 };
 
     const deckWithStats = deckList.map(card => {
@@ -224,13 +225,11 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
 
         let potentialAdds = [...availableAdds];
         
-        // LA MAGIA DEL MODO FLEXIBLE
         if (isRebalancing) {
           potentialAdds = potentialAdds.filter(a => typesToAdd.includes(a.type));
         } else if (!isFlexibleMode) {
-          // Si no es modo flexible, obligamos peras con peras
           potentialAdds = potentialAdds.filter(a => a.type === cutCard.broadType || a.type === 'Other');
-        } // Si es modo flexible, dejamos pasar TODO tipo de carta que tenga sinergia!
+        }
 
         const finalAlternatives = potentialAdds.filter(c => c.price <= maxAffordable).sort((a, b) => (b.inclusion || 0) - (a.inclusion || 0));
         const altMatch = finalAlternatives.find(a => !newSuggestions.some(s => normalizeName(s.addCard.name) === normalizeName(a.name)));
@@ -238,7 +237,11 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
         if (altMatch) {
           const stapleCard = await getCardByName(altMatch.name);
           if (stapleCard) {
-            if (!stapleCard.prices) stapleCard.prices = {};
+            // CORRECCIÓN EXACTA DE TIPOS PARA APROBAR EL BUILD
+            if (!stapleCard.prices) {
+              stapleCard.prices = { usd: null, usd_foil: null, eur: null, tix: null };
+            }
+            
             let finalCkPrice = Number(altMatch.price);
             
             try {
@@ -252,8 +255,7 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
             if (finalCkPrice > maxAffordable) continue;
             stapleCard.prices.usd = String(finalCkPrice);
 
-            // Extraemos los roles de la sugerencia!
-            const addedTags = getCardTags(stapleCard.oracle_text || stapleCard.card_faces?.[0]?.oracle_text || "", stapleCard.type_line);
+            const addedTags = getCardTags(stapleCard.oracle_text || stapleCard.card_faces?.[0]?.oracle_text || "", stapleCard.type_line || "");
 
             newSuggestions.push({
               cutCard, addCard: stapleCard, category: "", synergyCut: cutCard.inclusion, synergyAdd: altMatch.inclusion, reason: "", addTags: addedTags
@@ -331,7 +333,6 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
         </h3>
         
         <div className="flex items-center gap-4">
-          {/* INTERRUPTOR FLEXIBLE */}
           <label className="flex items-center gap-2 cursor-pointer group">
             <span className="text-sm font-bold text-gray-400 group-hover:text-purple-400 transition-colors flex items-center gap-1">
               <Wand2 className="w-4 h-4" /> Evolución Libre
@@ -357,8 +358,8 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
             const stats = feedbackStats[key] || { likes: 0, dislikes: 0, userVoted: null };
             const totalVotes = stats.likes + stats.dislikes;
             const approvalRating = totalVotes > 0 ? Math.round((stats.likes / totalVotes) * 100) : 0;
-            // @ts-ignore
-            const cTags = (pair.cutCard.tags as string[]) || [];
+            // Casteo seguro para evitar errores en compilación si 'tags' no existe en el tipo nativo
+            const cTags = (pair.cutCard as any).tags || [];
 
             return (
               <div key={idx} className="bg-gray-950 border border-gray-800/80 rounded-2xl p-6 flex flex-row items-center justify-between w-full hover:border-gray-700 transition-colors group relative">
@@ -373,7 +374,7 @@ export default function BrokerPanel({ deckList, commander, targetBudget, totalPr
                     <span className="text-gray-400 font-mono text-base">${pair.cutCard.ckPrice.toFixed(2)}</span>
                     <span className="text-xs font-medium text-gray-500 mb-2">{pair.synergyCut === -1 ? '0%' : `${pair.synergyCut}%`} Sinergia</span>
                     {cTags.length > 0 && (
-                      <div className="flex flex-wrap justify-center gap-1">{cTags.map(t => <span key={t} className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${getTagColor(t)}`}>{t}</span>)}</div>
+                      <div className="flex flex-wrap justify-center gap-1">{cTags.map((t: string) => <span key={t} className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${getTagColor(t)}`}>{t}</span>)}</div>
                     )}
                   </div>
                 </div>

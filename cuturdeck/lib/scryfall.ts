@@ -1,4 +1,5 @@
 export interface ScryfallCard {
+  oracle_text: any;
   stapleCard: {};
   card_faces: any;
   id: string;
