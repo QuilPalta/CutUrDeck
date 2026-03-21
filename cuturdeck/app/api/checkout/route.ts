@@ -9,20 +9,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Usuario no autenticado' }, { status: 401 });
     }
 
-    // Estas variables las obtendrás del panel de configuración de Lemon Squeezy
     const apiKey = process.env.LEMON_SQUEEZY_API_KEY;
     const storeId = process.env.LEMON_SQUEEZY_STORE_ID;
-    
-    // Cada plan (Mensual/Anual) en Lemon Squeezy es una "Variante" de tu producto
     const variantId = isAnnual 
       ? process.env.LEMON_SQUEEZY_VARIANT_ANNUAL 
       : process.env.LEMON_SQUEEZY_VARIANT_MONTHLY;
 
     if (!apiKey || !storeId || !variantId) {
-      return NextResponse.json({ error: 'Faltan variables de entorno de Lemon Squeezy' }, { status: 500 });
+      return NextResponse.json({ error: 'Configuración incompleta' }, { status: 500 });
     }
 
-    // Creación del Checkout vía API de Lemon Squeezy
+    // Usamos el origen de la petición para saber a dónde redirigir dinámicamente
+    const origin = req.headers.get('origin') || 'https://cuturdeck.site';
+    const redirectUrl = `${origin}/premium/success`;
+
     const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
       method: 'POST',
       headers: {
@@ -36,26 +36,22 @@ export async function POST(req: Request) {
           attributes: {
             checkout_data: {
               email: userEmail || undefined,
+              currency: "USD", 
               custom: {
-                // Esto es CRUCIAL: Pasamos tu userId como metadata para que cuando 
-                // Lemon Squeezy nos avise que pagaron, sepamos a qué cuenta darle el Premium
                 user_id: userId
               }
+            },
+            // AQUÍ ESTÁ LA MAGIA: Le decimos a Lemon Squeezy a dónde volver
+            checkout_options: {
+              redirect_url: redirectUrl,
+            },
+            product_options: {
+              enabled_variants: [variantId]
             }
           },
           relationships: {
-            store: {
-              data: {
-                type: "stores",
-                id: storeId.toString()
-              }
-            },
-            variant: {
-              data: {
-                type: "variants",
-                id: variantId.toString()
-              }
-            }
+            store: { data: { type: "stores", id: storeId.toString() } },
+            variant: { data: { type: "variants", id: variantId.toString() } }
           }
         }
       })
@@ -64,14 +60,13 @@ export async function POST(req: Request) {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.errors?.[0]?.detail || 'Error creando el checkout en Lemon Squeezy');
+      throw new Error(data.errors?.[0]?.detail || 'Error en Lemon Squeezy');
     }
 
-    // Lemon Squeezy devuelve la URL de pago lista para usar
     return NextResponse.json({ url: data.data.attributes.url });
 
   } catch (err: any) {
-    console.error('Error en checkout Lemon Squeezy:', err);
+    console.error('Error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
