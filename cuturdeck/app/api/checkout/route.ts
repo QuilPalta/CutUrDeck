@@ -20,7 +20,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Configuración incompleta en el servidor' }, { status: 500 });
     }
 
-    // Calculamos el dominio dinámicamente para que funcione en Vercel y Local
     const origin = req.headers.get('origin') || 'https://cuturdeck.site';
     const redirectUrl = `${origin}/premium/success`;
 
@@ -35,15 +34,17 @@ export async function POST(req: Request) {
         data: {
           type: "checkouts",
           attributes: {
-            checkout_options: {
-              embed: false,
-              redirect_url: redirectUrl // Aquí le decimos a dónde volver tras pagar
-            },
             checkout_data: {
               email: userEmail || undefined,
               custom: {
                 user_id: userId // CRUCIAL para el Webhook
               }
+            },
+            // AQUÍ ESTÁ LA CORRECCIÓN: Las opciones de redirección van aquí
+            product_options: {
+              redirect_url: redirectUrl,
+              receipt_button_text: "Ir a mi Bóveda",
+              receipt_link_url: redirectUrl
             }
           },
           relationships: {
@@ -60,7 +61,6 @@ export async function POST(req: Request) {
 
     const data = await response.json();
 
-    // Si Lemon Squeezy responde con error, lo logueamos detalladamente
     if (!response.ok) {
       console.error("Lemon Squeezy API Error:", JSON.stringify(data.errors, null, 2));
       throw new Error(data.errors?.[0]?.detail || 'Error de validación en Lemon Squeezy');
