@@ -16,10 +16,11 @@ export async function POST(req: Request) {
       : process.env.LEMON_SQUEEZY_VARIANT_MONTHLY;
 
     if (!apiKey || !storeId || !variantId) {
-      return NextResponse.json({ error: 'Configuración incompleta' }, { status: 500 });
+      console.error("Faltan variables de entorno de Lemon Squeezy.");
+      return NextResponse.json({ error: 'Configuración incompleta en el servidor' }, { status: 500 });
     }
 
-    // Usamos el origen de la petición para saber a dónde redirigir dinámicamente
+    // Calculamos el dominio dinámicamente para que funcione en Vercel y Local
     const origin = req.headers.get('origin') || 'https://cuturdeck.site';
     const redirectUrl = `${origin}/premium/success`;
 
@@ -34,24 +35,24 @@ export async function POST(req: Request) {
         data: {
           type: "checkouts",
           attributes: {
+            checkout_options: {
+              embed: false,
+              redirect_url: redirectUrl // Aquí le decimos a dónde volver tras pagar
+            },
             checkout_data: {
               email: userEmail || undefined,
-              currency: "USD", 
               custom: {
-                user_id: userId
+                user_id: userId // CRUCIAL para el Webhook
               }
-            },
-            // AQUÍ ESTÁ LA MAGIA: Le decimos a Lemon Squeezy a dónde volver
-            checkout_options: {
-              redirect_url: redirectUrl,
-            },
-            product_options: {
-              enabled_variants: [variantId]
             }
           },
           relationships: {
-            store: { data: { type: "stores", id: storeId.toString() } },
-            variant: { data: { type: "variants", id: variantId.toString() } }
+            store: { 
+              data: { type: "stores", id: storeId.toString() } 
+            },
+            variant: { 
+              data: { type: "variants", id: variantId.toString() } 
+            }
           }
         }
       })
@@ -59,14 +60,16 @@ export async function POST(req: Request) {
 
     const data = await response.json();
 
+    // Si Lemon Squeezy responde con error, lo logueamos detalladamente
     if (!response.ok) {
-      throw new Error(data.errors?.[0]?.detail || 'Error en Lemon Squeezy');
+      console.error("Lemon Squeezy API Error:", JSON.stringify(data.errors, null, 2));
+      throw new Error(data.errors?.[0]?.detail || 'Error de validación en Lemon Squeezy');
     }
 
     return NextResponse.json({ url: data.data.attributes.url });
 
   } catch (err: any) {
-    console.error('Error:', err);
+    console.error('Error en checkout API:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
