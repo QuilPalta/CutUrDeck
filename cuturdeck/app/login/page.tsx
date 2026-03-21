@@ -75,6 +75,7 @@ function LoginContent() {
           redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
+      console.log('window-location', { windowLocation: window.location.origin });
       if (error) throw error;
     } catch (err: any) {
       console.error(err);
