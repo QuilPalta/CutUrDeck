@@ -72,10 +72,10 @@ function LoginContent() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          // Lo mandamos directo a la app, sin intermediarios del servidor
+          redirectTo: `${window.location.origin}/dashboard`,
         },
       });
-      console.log('window-location', { windowLocation: window.location.origin });
       if (error) throw error;
     } catch (err: any) {
       console.error(err);
@@ -83,7 +83,7 @@ function LoginContent() {
       setIsGoogleLoading(false);
     }
   };
-
+  
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-purple-500/30 flex flex-col">
       <Navbar />
